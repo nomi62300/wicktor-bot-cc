@@ -32,6 +32,8 @@ const config = {
   leverage: envInt('LEVERAGE', 5),
   maxPositions: envInt('MAX_POSITIONS', 3),
   stopAtrFloorMult: envFloat('STOP_ATR_FLOOR_MULT', 1.0),
+  maxEntrySlippagePct: envFloat('MAX_ENTRY_SLIPPAGE_PCT', 0.005),
+  minLiquidationBufferMult: envFloat('MIN_LIQUIDATION_BUFFER_MULT', 1.5),
   // undefined (unset) = no cap, by design — see .env.example comment.
   maxNotionalPctOfBankroll: process.env.MAX_NOTIONAL_PCT_OF_BANKROLL
     ? parseFloat(process.env.MAX_NOTIONAL_PCT_OF_BANKROLL)

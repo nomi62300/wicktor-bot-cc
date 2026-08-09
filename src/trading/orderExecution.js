@@ -19,8 +19,25 @@
 // post-fill entry price, and a hard safety net closes the position
 // immediately at market if a valid protective stop still can't be
 // attached, rather than ever leaving a filled position unprotected.
+//
+// Two further protections added after the same slippage finding:
+// (1) entries are now slippage-BOUNDED IOC limit orders (MAX_ENTRY_
+// SLIPPAGE_PCT), not plain Market orders — a price that's already moved
+// too far by the time the order reaches the exchange simply doesn't
+// fill, rather than accepting arbitrary slippage. (2) leverage is set
+// explicitly before every entry, and an ESTIMATED liquidation price
+// (marginControl.js) is checked against the stop-loss (MIN_LIQUIDATION_
+// BUFFER_MULT) — confirmed live that Bybit's Demo Trading environment
+// rejects switching to isolated margin ("Demo trading are not
+// supported"), so this account is permanently cross-margin, where
+// Bybit doesn't expose a deterministic per-position liquidation price
+// to check directly. The estimate uses the standard isolated-margin
+// formula as a conservative proxy instead.
 const bybit = require('../market/bybitClient');
 const { computeTakeProfitLevels, allLegsNonZero } = require('./takeProfits');
+const { roundPriceToTick } = require('../market/instrumentInfo');
+const { ensureLeverage, checkLiquidationBuffer } = require('./marginControl');
+const config = require('../config');
 const logger = require('../utils/logger');
 
 const RATE_LIMIT_RETCODE = 10006;
@@ -98,9 +115,34 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
     return { ok: false, positionStillOpen: false, position: null, orders: [], errors: [{ stage: 'preflight', message: 'tp_split_not_representable' }] };
   }
 
-  logger.info('orderExecution', 'submitting entry order', { symbol, side, qty, intendedEntryPrice });
+  // Explicit leverage, set BEFORE the entry. NOTE: Bybit's Demo Trading
+  // rejects margin-MODE switching entirely (confirmed live, retCode
+  // 10032 "Demo trading are not supported") — this account is
+  // permanently cross-margin, so leverage can be set but true isolated
+  // per-position liquidation isolation is not available in this
+  // environment. See marginControl.js for the liquidation-buffer
+  // estimate this limitation requires below.
+  const marginRes = await ensureLeverage(symbol, config.leverage);
+  if (!marginRes.ok) {
+    return { ok: false, positionStillOpen: false, position: null, orders: [], errors: [{ stage: 'margin', ...marginRes }] };
+  }
+
+  // Entry is now a slippage-bounded IOC LIMIT order, not a plain Market
+  // order — confirmed live (2026-08-09, TUTUSDT) that a Market order can
+  // fill far enough from the decision price (~11% gap on a thin/volatile
+  // symbol) to break the SL/sizing math built around that price. A price
+  // that has already moved beyond MAX_ENTRY_SLIPPAGE_PCT by the time this
+  // reaches the exchange now simply doesn't fill (or partially fills)
+  // instead of accepting arbitrary slippage.
+  const limitPrice = side === 'Buy'
+    ? intendedEntryPrice * (1 + config.maxEntrySlippagePct)
+    : intendedEntryPrice * (1 - config.maxEntrySlippagePct);
+  const roundedLimitPrice = roundPriceToTick(limitPrice, instrumentInfo.tickSize, side === 'Buy' ? 'down' : 'up');
+
+  logger.info('orderExecution', 'submitting entry order', { symbol, side, qty, intendedEntryPrice, limitPrice: roundedLimitPrice });
   const entryRes = await withRateLimitRetry(() => bybit.submitOrder({
-    category: 'linear', symbol, side, orderType: 'Market', qty: qty.toString(), timeInForce: 'IOC',
+    category: 'linear', symbol, side, orderType: 'Limit', price: roundedLimitPrice.toString(),
+    qty: qty.toString(), timeInForce: 'IOC',
   }), `${symbol} entry`);
   if (entryRes.retCode !== 0) {
     logger.error('orderExecution', 'entry order rejected', { symbol, retCode: entryRes.retCode, retMsg: entryRes.retMsg });
@@ -112,8 +154,11 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
   const positionRes = await bybit.getPositionInfo({ category: 'linear', symbol });
   const position = positionRes.retCode === 0 ? positionRes.result.list.find(p => parseFloat(p.size) > 0) : null;
   if (!position) {
-    logger.error('orderExecution', 'no position found immediately after entry submit — entry may not have filled', { symbol });
-    return { ok: false, positionStillOpen: false, position: null, orders: [], errors: [{ stage: 'verify', message: 'position not found after entry' }] };
+    // Not necessarily an error — an IOC limit order that couldn't fill
+    // within the slippage tolerance cancels itself with nothing filled.
+    // That's the tolerance working as intended, not a bug.
+    logger.info('orderExecution', 'entry did not fill within slippage tolerance, skipping this candidate', { symbol, intendedEntryPrice, limitPrice: roundedLimitPrice });
+    return { ok: false, positionStillOpen: false, position: null, orders: [], errors: [{ stage: 'entry', message: 'not_filled_within_slippage_tolerance' }] };
   }
 
   const actualEntryPrice = parseFloat(position.avgPrice);
@@ -165,6 +210,27 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
       entryPrice: actualEntryPrice, slPrice: sl.slPrice, stopDistance: sl.stopDistance,
     };
   }
+
+  // Verify the stop-loss actually has room before the leverage-implied
+  // liquidation price could ever be reached (estimated — see
+  // marginControl.js for why this can't be Bybit's authoritative number
+  // on Demo Trading). If the buffer is too thin, this is a genuine danger
+  // the exchange won't otherwise warn about ahead of time, so it's
+  // treated the same as any other "can't establish valid protection"
+  // case: close immediately.
+  const liqCheck = await checkLiquidationBuffer({
+    symbol, side, entryPrice: actualEntryPrice, slPrice: sl.slPrice,
+    leverage: config.leverage, minBufferMult: config.minLiquidationBufferMult,
+  });
+  if (!liqCheck.safe) {
+    await closePositionAtMarket(symbol, side, actualQty, `insufficient liquidation buffer: ${liqCheck.reason} (ratio=${liqCheck.bufferRatio}, estLiqPrice=${liqCheck.liqPrice})`);
+    return {
+      ok: false, positionStillOpen: false, position, orders: [],
+      errors: [{ stage: 'liquidationBuffer', ...liqCheck }],
+      entryPrice: actualEntryPrice, slPrice: sl.slPrice, stopDistance: sl.stopDistance,
+    };
+  }
+  logger.info('orderExecution', 'liquidation buffer verified safe (estimated)', { symbol, estLiqPrice: liqCheck.liqPrice, bufferRatio: liqCheck.bufferRatio });
 
   // Three separate reduce-only limit orders for the partial TP split —
   // Bybit's single-field takeProfit is full-position only. Computed from
