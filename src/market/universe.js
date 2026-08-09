@@ -12,6 +12,16 @@ const logger = require('../utils/logger');
 // category shouldn't surface these — cheap and harmless if redundant.
 const LEVERAGED_PATTERN = /(UP|DOWN|BULL|BEAR)USDT$/;
 
+// contractType/quoteCoin alone are NOT sufficient to identify "is crypto" —
+// confirmed live: Bybit lists XAUUSDT (Gold) and CLUSDT (Crude Oil, the
+// exact symbol that slipped through the old bot's prefix filter, brief
+// bug #4) as LinearPerpetual/USDT-quoted, same as BTCUSDT. The real signal
+// is `symbolType`: 'commodity' and 'stock' are the non-crypto asset
+// classes; 'innovation' is still real crypto (newer/riskier listings,
+// verified against live instruments-info — e.g. AIOZUSDT), so it is NOT
+// excluded here.
+const NON_CRYPTO_SYMBOL_TYPES = new Set(['commodity', 'stock']);
+
 async function fetchLinearUsdtPerpetuals() {
   const res = await bybit.getInstrumentsInfo({ category: 'linear', limit: 1000 });
   if (res.retCode !== 0) {
@@ -22,6 +32,7 @@ async function fetchLinearUsdtPerpetuals() {
     inst.contractType === 'LinearPerpetual' &&
     inst.quoteCoin === 'USDT' &&
     inst.status === 'Trading' &&
+    !NON_CRYPTO_SYMBOL_TYPES.has(inst.symbolType) &&
     !LEVERAGED_PATTERN.test(inst.symbol)
   );
 }
