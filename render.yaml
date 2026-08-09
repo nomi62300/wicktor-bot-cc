@@ -1,21 +1,37 @@
 # Render Blueprint — use via Render Dashboard -> New -> Blueprint, or
-# configure manually per the README. This defines an ALWAYS-ON web
-# service (not a free-tier sleeping service, not a Background Worker) —
-# see brief section 6: the /performance dashboard needs a persistent
-# process serving it between scan/monitor cycles, which a sleeping or
-# non-web service can't provide.
+# configure manually per the README.
+#
+# Two deployment modes, see README "Deploying to Render" for the full
+# tradeoff writeup:
+#
+# 1. PAID always-on + persistent Disk (what brief section 6 actually
+#    specifies) — uncomment the `plan: starter` and `disk:` block below,
+#    and change DB_PATH to /var/data/wicktor.db. Trade history survives
+#    every redeploy/restart.
+#
+# 2. FREE tier + external keepalive pinger (e.g. cron-job.org hitting
+#    /health every ~10 min) — what this file is currently configured for.
+#    No Disk is available on the free plan, so DB_PATH points inside the
+#    app's own directory instead. This works and avoids the EACCES crash
+#    from trying to mkdir a Disk mount path that doesn't exist, but trade
+#    history (journal, bankroll balance, dashboard stats) is WIPED on
+#    every redeploy and on Render's periodic free-tier instance recycling
+#    — not just on manual restarts. Fine for further testing; the brief
+#    is explicit that this isn't something to trust once real trade-
+#    history continuity matters.
 services:
   - type: web
     name: wicktor-bot-cc
     runtime: node
-    plan: starter # smallest ALWAYS-ON paid tier — do not use "free" (sleeps after 15 min idle)
+    plan: free
+    # plan: starter   # <- switch to this (+ uncomment disk: below) for real persistence
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
-    disk:
-      name: wicktor-data
-      mountPath: /var/data
-      sizeGB: 1
+    # disk:
+    #   name: wicktor-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
     envVars:
       - key: BYBIT_DEMO_API_KEY
         sync: false
@@ -24,7 +40,7 @@ services:
       - key: INTENDED_ACCOUNT_SIZE_USDT
         value: "100"
       - key: DB_PATH
-        value: /var/data/wicktor.db
+        value: /opt/render/project/src/data/wicktor.db
       - key: RISK_PCT
         value: "0.0015"
       - key: LEVERAGE
