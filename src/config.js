@@ -31,6 +31,11 @@ const config = {
   riskPct: envFloat('RISK_PCT', 0.0015),
   leverage: envInt('LEVERAGE', 5),
   maxPositions: envInt('MAX_POSITIONS', 3),
+  stopAtrFloorMult: envFloat('STOP_ATR_FLOOR_MULT', 1.0),
+  // undefined (unset) = no cap, by design — see .env.example comment.
+  maxNotionalPctOfBankroll: process.env.MAX_NOTIONAL_PCT_OF_BANKROLL
+    ? parseFloat(process.env.MAX_NOTIONAL_PCT_OF_BANKROLL)
+    : undefined,
   minTurnover24hUsdt: envFloat('MIN_TURNOVER_24H_USDT', 15_000_000),
   positionMonitorIntervalMs: envInt('POSITION_MONITOR_INTERVAL_MS', 30_000),
   entryScanIntervalMs: envInt('ENTRY_SCAN_INTERVAL_MS', 60_000),
