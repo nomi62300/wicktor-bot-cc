@@ -1,0 +1,19 @@
+{
+  "name": "wicktor-bot-cc",
+  "version": "0.1.0",
+  "description": "24/7 automated trading bot running Wicktor's signal engine against Bybit Demo Trading, with a live performance dashboard.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "bybit-api": "^3.10.20",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
