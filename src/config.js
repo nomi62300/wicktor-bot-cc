@@ -37,6 +37,12 @@ const config = {
     ? parseFloat(process.env.MAX_NOTIONAL_PCT_OF_BANKROLL)
     : undefined,
   minTurnover24hUsdt: envFloat('MIN_TURNOVER_24H_USDT', 15_000_000),
+  // Optional shared-secret guard for state-changing dashboard endpoints
+  // (currently just manual position close). The dashboard itself stays
+  // public/no-auth per brief 3b (demo data only), but a WRITE action that
+  // can close real positions is a different risk than a read-only view —
+  // unset by default (logged clearly at startup), set it in production.
+  adminToken: process.env.ADMIN_TOKEN || null,
   positionMonitorIntervalMs: envInt('POSITION_MONITOR_INTERVAL_MS', 30_000),
   entryScanIntervalMs: envInt('ENTRY_SCAN_INTERVAL_MS', 60_000),
 };

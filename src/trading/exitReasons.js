@@ -18,6 +18,10 @@ const EXIT_REASONS = Object.freeze({
   BREAKEVEN_STOP: 'BREAKEVEN_STOP',
   TRAILING_STOP_HIT: 'TRAILING_STOP_HIT',
   JAW_INVALIDATION: 'JAW_INVALIDATION',
+  // A user-initiated close via the admin API (not a bot-driven exit) —
+  // still recorded from the real closing execution's price/qty, same as
+  // every other reason, never inferred.
+  MANUAL_CLOSE: 'MANUAL_CLOSE',
 });
 
 // Position lifecycle stage — determines which exit-reason a native SL

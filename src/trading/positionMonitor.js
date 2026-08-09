@@ -169,6 +169,39 @@ async function monitorOne(record, callbacks) {
   store.updatePosition(record.symbol, record);
 }
 
+/**
+ * Manually closes a bot-tracked position on request (e.g. the dashboard's
+ * admin close endpoint) — cancels its resting TP/SL orders, closes the
+ * remaining qty at market, and finalizes the journal from the REAL closing
+ * execution (never assumed), same verify-don't-trust pattern as every
+ * other exit path here.
+ */
+async function closePositionManually(symbol, callbacks) {
+  const record = store.getPosition(symbol);
+  if (!record) return { ok: false, error: 'not_tracked_by_bot' };
+
+  await cancelRemainingOrders(symbol);
+
+  const closeSide = record.side === 'Buy' ? 'Sell' : 'Buy';
+  const closeRes = await bybit.submitOrder({
+    category: 'linear', symbol, side: closeSide, orderType: 'Market',
+    qty: record.remainingQty.toString(), timeInForce: 'IOC', reduceOnly: true,
+  });
+  if (closeRes.retCode !== 0) {
+    logger.error('positionMonitor', 'manual close order rejected', { symbol, retCode: closeRes.retCode, retMsg: closeRes.retMsg });
+    return { ok: false, error: closeRes.retMsg };
+  }
+
+  const confirmExecs = await fetchNewExecutions(symbol, record.lastCheckedTime);
+  const closeExec = confirmExecs.find(e => e.orderId === closeRes.result.orderId) || null;
+
+  await callbacks.onFinalExit(record, EXIT_REASONS.MANUAL_CLOSE, closeExec);
+  store.removePosition(symbol);
+
+  logger.info('positionMonitor', 'position manually closed', { symbol, closePrice: closeExec ? closeExec.execPrice : null });
+  return { ok: true, exec: closeExec };
+}
+
 const defaultCallbacks = {
   onPartialFill: async (record, leg, exec, reason) => {
     logger.info('positionMonitor', 'partial fill (default handler)', { symbol: record.symbol, level: leg.level, reason });
@@ -191,4 +224,4 @@ async function monitorAllPositions(callbacks = defaultCallbacks) {
   }
 }
 
-module.exports = { monitorAllPositions, monitorOne, checkJawInvalidation };
+module.exports = { monitorAllPositions, monitorOne, checkJawInvalidation, closePositionManually };

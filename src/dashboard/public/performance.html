@@ -3,23 +3,46 @@
 <head>
 <meta charset="utf-8">
 <title>wicktor-bot-cc — Performance</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <style>
   :root { color-scheme: dark; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1115; color: #e6e8ee; margin: 0; padding: 24px; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1115; color: #e6e8ee; margin: 0;
+    padding: 24px; max-width: 100%; overflow-x: hidden;
+  }
   h1 { font-size: 20px; margin: 0 0 4px; }
-  .sub { color: #8b93a5; font-size: 13px; margin-bottom: 24px; }
-  .banner { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
-  .stat { background: #171a21; border: 1px solid #262b36; border-radius: 8px; padding: 14px 18px; min-width: 140px; }
-  .stat .label { font-size: 11px; color: #8b93a5; text-transform: uppercase; letter-spacing: .04em; }
-  .stat .value { font-size: 20px; font-weight: 600; margin-top: 4px; }
+  .sub { color: #8b93a5; font-size: 13px; margin-bottom: 20px; }
+  .banner { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .stat { background: #171a21; border: 1px solid #262b36; border-radius: 8px; padding: 12px 14px; min-width: 0; }
+  .stat .label { font-size: 10px; color: #8b93a5; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat .value { font-size: 18px; font-weight: 600; margin-top: 4px; word-break: break-word; }
   .pos { color: #4ade80; } .neg { color: #f87171; }
-  table { border-collapse: collapse; width: 100%; margin-bottom: 28px; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #262b36; }
-  th { color: #8b93a5; font-weight: 500; text-transform: uppercase; font-size: 11px; }
+  .table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 8px; border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; min-width: 480px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #262b36; white-space: nowrap; }
+  th { color: #8b93a5; font-weight: 500; text-transform: uppercase; font-size: 10px; }
+  section { margin-bottom: 26px; }
   section h2 { font-size: 14px; color: #c7cbd4; margin: 0 0 10px; }
-  a.export { display: inline-block; margin-bottom: 24px; color: #7aa2f7; text-decoration: none; font-size: 13px; }
+  a.export { display: inline-block; margin-bottom: 20px; color: #7aa2f7; text-decoration: none; font-size: 13px; padding: 4px 0; }
   .loading { color: #8b93a5; }
+  .btn-close {
+    background: #3a1f22; color: #f87171; border: 1px solid #5c2a2f; border-radius: 6px;
+    padding: 6px 12px; font-size: 12px; cursor: pointer; min-height: 32px;
+  }
+  .btn-close:active { background: #4a262a; }
+  .empty-state { color: #8b93a5; font-size: 13px; padding: 14px 4px; }
+
+  @media (max-width: 640px) {
+    body { padding: 14px; }
+    h1 { font-size: 18px; }
+    .banner { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .stat { padding: 10px 12px; }
+    .stat .value { font-size: 16px; }
+    th, td { padding: 7px 8px; font-size: 12px; }
+    section h2 { font-size: 13px; }
+  }
 </style>
 </head>
 <body>
@@ -30,23 +53,41 @@
   <a class="export" href="/api/trades.csv">↓ Export full trade journal (CSV)</a>
 
   <section>
+    <h2>Concurrently Open Positions</h2>
+    <div class="table-wrap">
+      <table id="positionsTable">
+        <thead><tr><th>Symbol</th><th>Side</th><th>Stage</th><th>Entry</th><th>Mark</th><th>Live PnL</th><th>R</th><th></th></tr></thead>
+        <tbody><tr><td colspan="8" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
     <h2>Quality Band Breakdown</h2>
-    <table id="bandTable"><thead><tr><th>Band</th><th>Count</th><th>Win Rate</th><th>Net PnL</th></tr></thead><tbody></tbody></table>
+    <div class="table-wrap">
+      <table id="bandTable"><thead><tr><th>Band</th><th>Count</th><th>Win Rate</th><th>Net PnL</th></tr></thead><tbody></tbody></table>
+    </div>
   </section>
 
   <section>
     <h2>Timeframe Breakdown</h2>
-    <table id="tfTable"><thead><tr><th>Entry TF</th><th>Count</th><th>Win Rate</th><th>Net PnL</th></tr></thead><tbody></tbody></table>
+    <div class="table-wrap">
+      <table id="tfTable"><thead><tr><th>Entry TF</th><th>Count</th><th>Win Rate</th><th>Net PnL</th></tr></thead><tbody></tbody></table>
+    </div>
   </section>
 
   <section>
     <h2>Exit Distribution</h2>
-    <table id="exitTable"><thead><tr><th>Exit Reason</th><th>Count</th><th>Net PnL</th></tr></thead><tbody></tbody></table>
+    <div class="table-wrap">
+      <table id="exitTable"><thead><tr><th>Exit Reason</th><th>Count</th><th>Net PnL</th></tr></thead><tbody></tbody></table>
+    </div>
   </section>
 
   <section>
     <h2>Per-Symbol Breakdown</h2>
-    <table id="symbolTable"><thead><tr><th>Symbol</th><th>Count</th><th>Win Rate</th><th>Net PnL</th></tr></thead><tbody></tbody></table>
+    <div class="table-wrap">
+      <table id="symbolTable"><thead><tr><th>Symbol</th><th>Count</th><th>Win Rate</th><th>Net PnL</th></tr></thead><tbody></tbody></table>
+    </div>
   </section>
 
 <script>
@@ -71,7 +112,58 @@ function fillBreakdownTable(tbodyId, data, cols) {
   }).join('');
 }
 
-async function load() {
+async function closePosition(symbol) {
+  if (!confirm('Close ' + symbol + ' now at market? This finalizes the trade in the journal.')) return;
+  let token = localStorage.getItem('wicktorAdminToken') || '';
+  const res = await fetch('/api/positions/' + symbol + '/close', {
+    method: 'POST',
+    headers: token ? { 'x-admin-token': token } : {},
+  });
+  if (res.status === 401) {
+    token = prompt('Admin token required to close positions:');
+    if (!token) return;
+    localStorage.setItem('wicktorAdminToken', token);
+    return closePosition(symbol);
+  }
+  const result = await res.json();
+  if (!result.ok) {
+    alert('Close failed: ' + (result.error || 'unknown error'));
+  }
+  loadPositions();
+  loadStats();
+}
+
+async function loadPositions() {
+  const tbody = document.querySelector('#positionsTable tbody');
+  let positions;
+  try {
+    positions = await (await fetch('/api/positions/live')).json();
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="8" class="loading">Failed to load</td></tr>';
+    return;
+  }
+  if (!positions || positions.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No open positions right now</td></tr>';
+    return;
+  }
+  tbody.innerHTML = positions.map(p => {
+    if (p.error) return '<tr><td>' + p.symbol + '</td><td colspan="7" class="loading">lookup failed</td></tr>';
+    const pnlStr = p.unrealizedPnlUsdt != null ? fmtUsd(p.unrealizedPnlUsdt) : '—';
+    const rStr = p.unrealizedRMultiple != null ? p.unrealizedRMultiple.toFixed(2) + 'R' : '—';
+    return '<tr>' +
+      '<td>' + p.symbol + '</td>' +
+      '<td>' + p.side + '</td>' +
+      '<td>' + p.stage + '</td>' +
+      '<td>' + p.entryPrice + '</td>' +
+      '<td>' + (p.markPrice != null ? p.markPrice : '—') + '</td>' +
+      '<td class="' + pnlClass(p.unrealizedPnlUsdt || 0) + '">' + pnlStr + '</td>' +
+      '<td class="' + pnlClass(p.unrealizedRMultiple || 0) + '">' + rStr + '</td>' +
+      '<td><button class="btn-close" onclick="closePosition(\'' + p.symbol + '\')">Close</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function loadStats() {
   const stats = await (await fetch('/api/stats')).json();
 
   document.getElementById('banner').innerHTML = [
@@ -93,8 +185,13 @@ async function load() {
   fillBreakdownTable('#symbolTable', stats.symbolBreakdown, ['count', 'winRate', 'netPnl']);
 }
 
-load();
-setInterval(load, 30000);
+function loadAll() {
+  loadStats();
+  loadPositions();
+}
+
+loadAll();
+setInterval(loadAll, 30000);
 </script>
 </body>
 </html>
