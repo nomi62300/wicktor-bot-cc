@@ -16,6 +16,9 @@ const { executeEntry } = require('./orderExecution');
 const { getInstrumentInfo } = require('../market/instrumentInfo');
 const { monitorAllPositions } = require('./positionMonitor');
 const store = require('./positionStore');
+const tradeJournal = require('../persistence/tradeJournal');
+const bankroll = require('../persistence/bankroll');
+const journalIntegration = require('./journalIntegration');
 const logger = require('../utils/logger');
 
 let scanRunning = false;
@@ -157,6 +160,13 @@ async function attemptEntry(decision, bankrollUsdt) {
   }
 
   const slOrder = findSlOrder(result.orders);
+  const openedAt = Date.now();
+  const tradeId = tradeJournal.openTrade({
+    symbol, side, band: decision.band, entryTf, entryPrice,
+    stopDistance: sl.stopDistance, totalQty: sizing.qty,
+    riskAmountUsdt: sizing.riskAmountUsdt, accountBalanceBefore: bankrollUsdt, openedAt,
+  });
+
   store.addPosition({
     symbol, side, entryPrice,
     stopDistance: sl.stopDistance,
@@ -168,9 +178,10 @@ async function attemptEntry(decision, bankrollUsdt) {
     tpOrders: result.tpLevels.map(tp => ({ level: tp.level, orderId: tp.orderId, qty: tp.qty, price: tp.price, filled: false })),
     instrumentInfo,
     bankrollBeforeTrade: bankrollUsdt,
-    openedAt: Date.now(),
+    openedAt,
+    tradeId,
   });
-  logger.info('cycle', 'entry registered for monitoring', { symbol, side, qty: sizing.qty, band: decision.band });
+  logger.info('cycle', 'entry registered for monitoring', { symbol, side, qty: sizing.qty, band: decision.band, tradeId });
 }
 
 /**
@@ -178,7 +189,7 @@ async function attemptEntry(decision, bankrollUsdt) {
  * is injected (M5's persistence/bankroll.js will supply the real running
  * balance; defaults to the configured starting bankroll for now).
  */
-async function runEntryScanCycle(getBankroll = async () => config.accountSizeUsdt) {
+async function runEntryScanCycle(getBankroll = async () => bankroll.getCurrentBalance()) {
   if (scanRunning) {
     logger.warn('cycle', 'scan cycle already running, skipping this tick');
     return;
@@ -250,7 +261,7 @@ async function runPositionMonitorCycle(callbacks) {
  * running process, brief section 6) and runs an initial tick of each
  * immediately after startup reconciliation.
  */
-async function startTradingLoop({ getBankroll, monitorCallbacks } = {}) {
+async function startTradingLoop({ getBankroll, monitorCallbacks = journalIntegration } = {}) {
   await reconcileOpenPositions();
 
   await runPositionMonitorCycle(monitorCallbacks);
