@@ -175,16 +175,31 @@ async function attemptEntry(decision, bankrollUsdt) {
     instrumentInfo,
   });
 
-  if (!result.ok) {
-    logger.error('cycle', 'entry execution failed', { symbol, errors: result.errors });
+  // Gate on positionStillOpen, NOT ok — confirmed live (2026-08-09) that a
+  // TP leg can fail (rate limit, rejected price, etc.) while the entry and
+  // SL both succeeded. The old `if (!result.ok) return;` here discarded
+  // that position entirely: still open and SL-protected on the exchange,
+  // but invisible to positionStore — which silently broke the max-
+  // concurrent-positions limit (an untracked position doesn't count
+  // against it) and left the position unmonitored and unjournaled
+  // indefinitely. Any position that is actually open must be tracked,
+  // even in this degraded (fewer than 3 TP legs) state.
+  if (!result.positionStillOpen) {
+    logger.error('cycle', 'entry execution failed, no live position to track', { symbol, errors: result.errors });
     return;
   }
+  if (!result.ok) {
+    logger.warn('cycle', 'entry succeeded with degraded protection (some TP legs failed) — tracking anyway with the legs that did succeed', {
+      symbol, tpLegsPlaced: result.tpLevels.length, errors: result.errors,
+    });
+  }
 
+  const actualQty = parseFloat(result.position.size);
   const slOrder = findSlOrder(result.orders);
   const openedAt = Date.now();
   const tradeId = tradeJournal.openTrade({
     symbol, side, band: decision.band, entryTf, entryPrice: result.entryPrice,
-    stopDistance: result.stopDistance, totalQty: sizing.qty,
+    stopDistance: result.stopDistance, totalQty: actualQty,
     riskAmountUsdt: sizing.riskAmountUsdt, accountBalanceBefore: bankrollUsdt, openedAt,
   });
 
@@ -194,8 +209,8 @@ async function attemptEntry(decision, bankrollUsdt) {
     slPrice: result.slPrice,
     slOrderId: slOrder ? slOrder.orderId : null,
     entryTf,
-    totalQty: sizing.qty,
-    remainingQty: sizing.qty,
+    totalQty: actualQty,
+    remainingQty: actualQty,
     tpOrders: result.tpLevels.map(tp => ({ level: tp.level, orderId: tp.orderId, qty: tp.qty, price: tp.price, filled: false })),
     instrumentInfo,
     bankrollBeforeTrade: bankrollUsdt,
@@ -244,11 +259,20 @@ async function runEntryScanCycle(getBankroll = async () => bankroll.getCurrentBa
     const bankrollUsdt = await getBankroll();
     const candidates = results.filter(r => r.tradeable && !store.getPosition(r.symbol));
 
+    // Small pacing gap between candidates — confirmed live (2026-08-09)
+    // that firing several full entry sequences (~7 API calls each) back-
+    // to-back in one tick can burst past Bybit's rate limit, causing
+    // spurious TP-leg/entry rejections unrelated to the trades themselves.
+    // orderExecution's own retry handles an occasional rate-limit hit;
+    // this reduces how often that happens in the first place.
+    let isFirst = true;
     for (const decision of candidates) {
       if (store.openPositionCount() >= config.maxPositions) {
         logger.info('cycle', 'max concurrent positions reached mid-scan, stopping further entries this tick');
         break;
       }
+      if (!isFirst) await new Promise(r => setTimeout(r, 500));
+      isFirst = false;
       try {
         await attemptEntry(decision, bankrollUsdt);
       } catch (err) {

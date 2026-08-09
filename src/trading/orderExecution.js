@@ -23,6 +23,30 @@ const bybit = require('../market/bybitClient');
 const { computeTakeProfitLevels, allLegsNonZero } = require('./takeProfits');
 const logger = require('../utils/logger');
 
+const RATE_LIMIT_RETCODE = 10006;
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/**
+ * Retries once on Bybit's rate-limit response (retCode 10006) after a
+ * short backoff — confirmed live (2026-08-09) that firing several full
+ * entry sequences back-to-back in one scan tick (each ~7 API calls) can
+ * burst past Bybit's rate limit, causing spurious TP-leg/entry rejections
+ * that have nothing to do with the trade itself. A single retry is enough
+ * to smooth over that self-inflicted burst without masking a genuine,
+ * repeated rate-limit problem (which will still surface as a real error
+ * after the retry).
+ */
+async function withRateLimitRetry(fn, label) {
+  const res = await fn();
+  if (res.retCode === RATE_LIMIT_RETCODE) {
+    logger.warn('orderExecution', 'rate limited, retrying once after backoff', { label });
+    await sleep(600);
+    return fn();
+  }
+  return res;
+}
+
 async function closePositionAtMarket(symbol, side, qty, reason) {
   const closeSide = side === 'Buy' ? 'Sell' : 'Buy';
   logger.error('orderExecution', 'SAFETY NET: closing position immediately at market — could not establish valid protection', {
@@ -71,16 +95,16 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
     logger.warn('orderExecution', 'skip: qty too small to split into 3 non-zero TP legs at this instrument\'s qtyStep', {
       symbol, qty, qtyStep: instrumentInfo.qtyStep,
     });
-    return { ok: false, position: null, orders: [], errors: [{ stage: 'preflight', message: 'tp_split_not_representable' }] };
+    return { ok: false, positionStillOpen: false, position: null, orders: [], errors: [{ stage: 'preflight', message: 'tp_split_not_representable' }] };
   }
 
   logger.info('orderExecution', 'submitting entry order', { symbol, side, qty, intendedEntryPrice });
-  const entryRes = await bybit.submitOrder({
+  const entryRes = await withRateLimitRetry(() => bybit.submitOrder({
     category: 'linear', symbol, side, orderType: 'Market', qty: qty.toString(), timeInForce: 'IOC',
-  });
+  }), `${symbol} entry`);
   if (entryRes.retCode !== 0) {
     logger.error('orderExecution', 'entry order rejected', { symbol, retCode: entryRes.retCode, retMsg: entryRes.retMsg });
-    return { ok: false, position: null, orders: [], errors: [{ stage: 'entry', ...entryRes }] };
+    return { ok: false, positionStillOpen: false, position: null, orders: [], errors: [{ stage: 'entry', ...entryRes }] };
   }
 
   // Real fill price — everything downstream (SL, TP, journaling) is
@@ -89,7 +113,7 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
   const position = positionRes.retCode === 0 ? positionRes.result.list.find(p => parseFloat(p.size) > 0) : null;
   if (!position) {
     logger.error('orderExecution', 'no position found immediately after entry submit — entry may not have filled', { symbol });
-    return { ok: false, position: null, orders: [], errors: [{ stage: 'verify', message: 'position not found after entry' }] };
+    return { ok: false, positionStillOpen: false, position: null, orders: [], errors: [{ stage: 'verify', message: 'position not found after entry' }] };
   }
 
   const actualEntryPrice = parseFloat(position.avgPrice);
@@ -106,7 +130,7 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
     sl = computeStopLoss(actualEntryPrice);
   } catch (err) {
     await closePositionAtMarket(symbol, side, actualQty, `computeStopLoss threw: ${err.message}`);
-    return { ok: false, position, orders: [], errors: [{ stage: 'stopLoss', message: err.message }], entryPrice: actualEntryPrice };
+    return { ok: false, positionStillOpen: false, position, orders: [], errors: [{ stage: 'stopLoss', message: err.message }], entryPrice: actualEntryPrice };
   }
 
   // qty was sized against provisionalStopDistance BEFORE the real fill was
@@ -128,15 +152,15 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
     }
   }
 
-  const slRes = await bybit.setTradingStop({
+  const slRes = await withRateLimitRetry(() => bybit.setTradingStop({
     category: 'linear', symbol, stopLoss: sl.slPrice.toString(), positionIdx: 0,
-  });
+  }), `${symbol} SL attach`);
   if (slRes.retCode !== 0) {
     // Never leave a filled position unprotected — close it immediately
     // rather than log-and-continue (the exact gap that caused this fix).
     await closePositionAtMarket(symbol, side, actualQty, `SL attach rejected even with real fill price: ${slRes.retMsg}`);
     return {
-      ok: false, position, orders: [],
+      ok: false, positionStillOpen: false, position, orders: [],
       errors: [{ stage: 'stopLoss', ...slRes }],
       entryPrice: actualEntryPrice, slPrice: sl.slPrice, stopDistance: sl.stopDistance,
     };
@@ -146,18 +170,31 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
   // Bybit's single-field takeProfit is full-position only. Computed from
   // the REAL entry price and the SL actually attached, using the REAL
   // filled qty.
+  //
+  // A TP leg failing here (rejected price, rate limit, etc.) does NOT mean
+  // the position is unprotected — the SL above already succeeded — so this
+  // is deliberately NOT another safety-net-close case. But it must still
+  // be surfaced clearly and the position must still end up tracked with
+  // whatever legs DID succeed (see positionStillOpen below): confirmed
+  // live (2026-08-09) that discarding a position whose TP legs partially
+  // failed left it open on the exchange but invisible to positionStore,
+  // which silently broke the max-concurrent-positions limit (an untracked
+  // position doesn't count against it) and left it unmonitored/
+  // unjournaled indefinitely.
   const tpLevels = computeTakeProfitLevels({
     side, entryPrice: actualEntryPrice, stopDistance: sl.stopDistance, totalQty: actualQty, instrumentInfo,
   });
   const tpResults = [];
   for (const tp of tpLevels) {
     if (tp.qty <= 0) continue; // already preflighted at the qty level; a 0 here would only happen from actualQty differing from intended qty
-    const res = await bybit.submitOrder({
+    const res = await withRateLimitRetry(() => bybit.submitOrder({
       category: 'linear', symbol, side: closeSide, orderType: 'Limit',
       qty: tp.qty.toString(), price: tp.price.toString(), timeInForce: 'GTC', reduceOnly: true,
-    });
+    }), `${symbol} ${tp.level}`);
     if (res.retCode !== 0) {
-      logger.error('orderExecution', 'TP leg rejected', { symbol, level: tp.level, retCode: res.retCode, retMsg: res.retMsg });
+      logger.error('orderExecution', 'TP leg rejected — position remains open and SL-protected, but this leg is missing', {
+        symbol, level: tp.level, retCode: res.retCode, retMsg: res.retMsg,
+      });
       errors.push({ stage: tp.level, ...res });
     } else {
       tpResults.push({ ...tp, orderId: res.result.orderId });
@@ -178,13 +215,19 @@ async function executeEntry({ symbol, side, qty, intendedEntryPrice, provisional
     openOrderCount: orders.length,
   });
 
-  if (!finalPosition || parseFloat(finalPosition.size) === 0) {
+  const stillOpen = !!finalPosition && parseFloat(finalPosition.size) > 0;
+  if (!stillOpen) {
     logger.error('orderExecution', 'no position found after full order sequence — entry may have been closed already', { symbol });
     errors.push({ stage: 'verify', message: 'position not found after full sequence' });
   }
 
   return {
+    // ok = fully clean (SL + all 3 TP legs placed). positionStillOpen =
+    // there IS a real, SL-protected position that must be tracked even if
+    // ok is false (e.g. one TP leg failed) — callers should gate
+    // registration/journaling on positionStillOpen, not ok.
     ok: errors.length === 0,
+    positionStillOpen: stillOpen,
     position: finalPosition,
     orders,
     tpLevels: tpResults,
