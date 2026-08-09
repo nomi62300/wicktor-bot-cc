@@ -1,0 +1,41 @@
+# Render Blueprint — use via Render Dashboard -> New -> Blueprint, or
+# configure manually per the README. This defines an ALWAYS-ON web
+# service (not a free-tier sleeping service, not a Background Worker) —
+# see brief section 6: the /performance dashboard needs a persistent
+# process serving it between scan/monitor cycles, which a sleeping or
+# non-web service can't provide.
+services:
+  - type: web
+    name: wicktor-bot-cc
+    runtime: node
+    plan: starter # smallest ALWAYS-ON paid tier — do not use "free" (sleeps after 15 min idle)
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    disk:
+      name: wicktor-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: BYBIT_DEMO_API_KEY
+        sync: false
+      - key: BYBIT_DEMO_API_SECRET
+        sync: false
+      - key: INTENDED_ACCOUNT_SIZE_USDT
+        value: "100"
+      - key: DB_PATH
+        value: /var/data/wicktor.db
+      - key: RISK_PCT
+        value: "0.0015"
+      - key: LEVERAGE
+        value: "5"
+      - key: MAX_POSITIONS
+        value: "3"
+      - key: STOP_ATR_FLOOR_MULT
+        value: "1.0"
+      - key: MIN_TURNOVER_24H_USDT
+        value: "15000000"
+      - key: POSITION_MONITOR_INTERVAL_MS
+        value: "30000"
+      - key: ENTRY_SCAN_INTERVAL_MS
+        value: "60000"

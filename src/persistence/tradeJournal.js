@@ -26,6 +26,21 @@ function findOpenTradeId(symbol, openedAt) {
 }
 
 /**
+ * Used by startup reconciliation to re-link a position that predates this
+ * process run back to its original journal row (positionStore is
+ * in-memory only, so a restart otherwise orphans the tradeId — the exact
+ * gap that surfaced live-testing a server restart: a position opened just
+ * before a restart got re-adopted with no tradeId, so its eventual close
+ * would never have been journaled). Most-recent open row for the symbol
+ * is assumed to be the match, since brief section 4 caps at 1 open
+ * position per symbol.
+ */
+function findMostRecentOpenTrade(symbol) {
+  const row = db.prepare(`SELECT * FROM trades WHERE symbol = ? AND status = 'open' ORDER BY id DESC LIMIT 1`).get(symbol);
+  return row || null;
+}
+
+/**
  * Records a partial TP fill (TP1 or TP2 — TP3/final goes through
  * closeTrade instead, since it also finalizes the row).
  */
@@ -90,4 +105,4 @@ function getClosedTrades() {
   return db.prepare(`SELECT * FROM trades WHERE status = 'closed' ORDER BY closed_at DESC`).all();
 }
 
-module.exports = { openTrade, findOpenTradeId, recordPartialFill, closeTrade, getAllTrades, getClosedTrades };
+module.exports = { openTrade, findOpenTradeId, findMostRecentOpenTrade, recordPartialFill, closeTrade, getAllTrades, getClosedTrades };

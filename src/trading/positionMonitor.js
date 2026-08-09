@@ -74,6 +74,14 @@ async function monitorOne(record, callbacks) {
   for (const exec of executions) {
     latestTime = Math.max(latestTime, Number(exec.execTime));
 
+    // Opening fills (the entry itself) are always on record.side; every
+    // closing fill (TP/SL/jaw) is always the opposite side, since they're
+    // all reduce-only. A small gap between the entry's real exec timestamp
+    // and this record's lastCheckedTime (e.g. right after a reconciliation
+    // re-link) can otherwise surface the entry fill itself as a spurious
+    // "unrecognized execution" on the very first monitor tick.
+    if (exec.side === record.side) continue;
+
     const leg = findFilledLeg(record, exec);
     if (leg) {
       leg.filled = true;

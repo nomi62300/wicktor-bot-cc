@@ -79,23 +79,33 @@ async function reconcileOpenPositions() {
       const instrumentInfo = await getInstrumentInfo(p.symbol);
       const size = parseFloat(p.size);
 
+      // Re-link to this position's original journal row if one exists (a
+      // restart between entry and close otherwise orphans the tradeId —
+      // confirmed live: a position opened seconds before a test restart
+      // got re-adopted with no tradeId, so its close would never have
+      // been journaled).
+      const existingTrade = tradeJournal.findMostRecentOpenTrade(p.symbol);
+
       store.addPosition({
         symbol: p.symbol,
         side: p.side,
-        entryPrice: parseFloat(p.avgPrice),
-        stopDistance: p.stopLoss ? Math.abs(parseFloat(p.avgPrice) - parseFloat(p.stopLoss)) : null,
+        entryPrice: existingTrade ? existingTrade.entry_price : parseFloat(p.avgPrice),
+        stopDistance: existingTrade ? existingTrade.stop_distance : (p.stopLoss ? Math.abs(parseFloat(p.avgPrice) - parseFloat(p.stopLoss)) : null),
         slPrice: p.stopLoss ? parseFloat(p.stopLoss) : null,
         slOrderId: slOrder ? slOrder.orderId : null,
-        entryTf: 'm15', // unknown after restart — see doc comment above
-        totalQty: size,
+        entryTf: existingTrade ? existingTrade.entry_tf : 'm15', // unknown after restart if no journal match
+        totalQty: existingTrade ? existingTrade.total_qty : size,
         remainingQty: size,
         tpOrders,
         instrumentInfo,
-        bankrollBeforeTrade: config.accountSizeUsdt,
-        openedAt: Date.now(),
+        bankrollBeforeTrade: existingTrade ? existingTrade.account_balance_before : config.accountSizeUsdt,
+        openedAt: existingTrade ? existingTrade.opened_at : Date.now(),
+        tradeId: existingTrade ? existingTrade.id : null,
       });
       logger.warn('cycle', 'reconciled pre-existing open position from live Bybit state', {
-        symbol: p.symbol, side: p.side, size, note: 'entryTf assumed m15, original qty/openedAt unknown',
+        symbol: p.symbol, side: p.side, size,
+        tradeId: existingTrade ? existingTrade.id : null,
+        note: existingTrade ? 're-linked to original journal row' : 'no matching journal row found — entryTf/openedAt assumed, close will NOT be journaled',
       });
     } catch (err) {
       logger.error('cycle', 'reconciliation failed for one position, skipping it', { symbol: p.symbol, error: err.message });
