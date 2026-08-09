@@ -94,6 +94,7 @@
 function fmtUsd(n) { return (n >= 0 ? '+' : '') + '$' + n.toFixed(2); }
 function fmtPct(n) { return (n * 100).toFixed(1) + '%'; }
 function pnlClass(n) { return n >= 0 ? 'pos' : 'neg'; }
+function fmtCountRate(obj) { return obj.count + ' (' + fmtPct(obj.rate) + ')'; }
 
 function statCard(label, value, cls) {
   return '<div class="stat"><div class="label">' + label + '</div><div class="value ' + (cls || '') + '">' + value + '</div></div>';
@@ -176,7 +177,11 @@ async function loadStats() {
     statCard('Avg Win/Loss Ratio', stats.avgWinLossRatio != null ? stats.avgWinLossRatio.toFixed(2) : '—'),
     statCard('Max Consecutive Losses', stats.maxConsecutiveLosses),
     statCard('Max Drawdown', fmtPct(stats.maxDrawdownPct), 'neg'),
-    statCard('TP1 / TP2 / TP3 Hit Rate', fmtPct(stats.tpHitRate.tp1) + ' / ' + fmtPct(stats.tpHitRate.tp2) + ' / ' + fmtPct(stats.tpHitRate.tp3)),
+    statCard('TP1 Hit', fmtCountRate(stats.tpHitRate.tp1)),
+    statCard('TP2 Hit', fmtCountRate(stats.tpHitRate.tp2)),
+    statCard('TP3 Hit', fmtCountRate(stats.tpHitRate.tp3)),
+    statCard('Stop-Loss Hit', fmtCountRate(stats.tpHitRate.slHit), 'neg'),
+    statCard('Breakeven Stop', fmtCountRate(stats.tpHitRate.breakeven)),
   ].join('');
 
   fillBreakdownTable('#bandTable', stats.bandBreakdown, ['count', 'winRate', 'netPnl']);

@@ -54,11 +54,19 @@ function computeStats() {
     netPnl: round2(group.reduce((s, t) => s + t.realized_pnl_usdt, 0)),
   }));
 
-  // Per-TP hit-rate breakdown
+  // Per-TP hit-rate breakdown, plus genuine-stop-loss and breakeven-stop
+  // hit rates as their own distinct counts — kept separate per brief
+  // section 8 (STOP_LOSS_HIT / BREAKEVEN_STOP / TRAILING_STOP_HIT are
+  // deliberately different exit reasons, not conflated into one "stop
+  // hit" bucket). Each exposes both the raw count and the rate, since a
+  // bare percentage on a small trade count is easy to misread.
+  const countAndRate = (count) => ({ count, rate: totalTrades > 0 ? round4(count / totalTrades) : 0 });
   const tpHitRate = {
-    tp1: totalTrades > 0 ? trades.filter(t => t.tp1_filled).length / totalTrades : 0,
-    tp2: totalTrades > 0 ? trades.filter(t => t.tp2_filled).length / totalTrades : 0,
-    tp3: totalTrades > 0 ? trades.filter(t => t.tp3_filled).length / totalTrades : 0,
+    tp1: countAndRate(trades.filter(t => t.tp1_filled).length),
+    tp2: countAndRate(trades.filter(t => t.tp2_filled).length),
+    tp3: countAndRate(trades.filter(t => t.tp3_filled).length),
+    slHit: countAndRate(trades.filter(t => t.final_exit_reason === 'STOP_LOSS_HIT').length),
+    breakeven: countAndRate(trades.filter(t => t.final_exit_reason === 'BREAKEVEN_STOP').length),
   };
 
   // Per-symbol breakdown
