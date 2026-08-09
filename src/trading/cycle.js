@@ -149,19 +149,30 @@ async function attemptEntry(decision, bankrollUsdt) {
     return;
   }
 
-  const entryPrice = candles[candles.length - 1].c; // confirmed closed candle only (candles.js trims unclosed)
+  const decisionPrice = candles[candles.length - 1].c; // confirmed closed candle only (candles.js trims unclosed) — a DECISION-TIME estimate only
   const side = evaluation.bias === 1 ? 'Buy' : 'Sell';
   const instrumentInfo = await getInstrumentInfo(symbol);
-  const sl = computeStopLoss(side, candles, entryPrice);
-  const sizing = computePositionSize({ symbol, side, bankrollUsdt, entryPrice, stopDistance: sl.stopDistance, instrumentInfo });
+
+  // Provisional SL/sizing from the decision price — needed to decide qty
+  // BEFORE submitting the entry (we don't know the real fill price yet).
+  const provisionalSl = computeStopLoss(side, candles, decisionPrice);
+  const sizing = computePositionSize({ symbol, side, bankrollUsdt, entryPrice: decisionPrice, stopDistance: provisionalSl.stopDistance, instrumentInfo });
 
   if (sizing.skip) {
     logger.info('cycle', 'entry skipped by position sizing', { symbol, reason: sizing.skipReason });
     return;
   }
 
+  // The REAL SL/TP are computed from the actual fill price inside
+  // executeEntry, via this callback — never the decision price above.
+  // Confirmed live (TUTUSDT) that skipping this step lets a filled
+  // position end up with a stop-loss on the wrong side of its real entry.
   const result = await executeEntry({
-    symbol, side, qty: sizing.qty, entryPrice, slPrice: sl.slPrice, stopDistance: sl.stopDistance, instrumentInfo,
+    symbol, side, qty: sizing.qty,
+    intendedEntryPrice: decisionPrice,
+    provisionalStopDistance: provisionalSl.stopDistance,
+    computeStopLoss: (actualEntryPrice) => computeStopLoss(side, candles, actualEntryPrice),
+    instrumentInfo,
   });
 
   if (!result.ok) {
@@ -172,15 +183,15 @@ async function attemptEntry(decision, bankrollUsdt) {
   const slOrder = findSlOrder(result.orders);
   const openedAt = Date.now();
   const tradeId = tradeJournal.openTrade({
-    symbol, side, band: decision.band, entryTf, entryPrice,
-    stopDistance: sl.stopDistance, totalQty: sizing.qty,
+    symbol, side, band: decision.band, entryTf, entryPrice: result.entryPrice,
+    stopDistance: result.stopDistance, totalQty: sizing.qty,
     riskAmountUsdt: sizing.riskAmountUsdt, accountBalanceBefore: bankrollUsdt, openedAt,
   });
 
   store.addPosition({
-    symbol, side, entryPrice,
-    stopDistance: sl.stopDistance,
-    slPrice: sl.slPrice,
+    symbol, side, entryPrice: result.entryPrice,
+    stopDistance: result.stopDistance,
+    slPrice: result.slPrice,
     slOrderId: slOrder ? slOrder.orderId : null,
     entryTf,
     totalQty: sizing.qty,
@@ -191,7 +202,10 @@ async function attemptEntry(decision, bankrollUsdt) {
     openedAt,
     tradeId,
   });
-  logger.info('cycle', 'entry registered for monitoring', { symbol, side, qty: sizing.qty, band: decision.band, tradeId });
+  logger.info('cycle', 'entry registered for monitoring', {
+    symbol, side, qty: sizing.qty, band: decision.band, tradeId,
+    entryPrice: result.entryPrice, slippagePct: result.slippagePct,
+  });
 }
 
 /**
