@@ -17,7 +17,10 @@ const EXIT_REASONS = Object.freeze({
   STOP_LOSS_HIT: 'STOP_LOSS_HIT',
   BREAKEVEN_STOP: 'BREAKEVEN_STOP',
   TRAILING_STOP_HIT: 'TRAILING_STOP_HIT',
-  JAW_INVALIDATION: 'JAW_INVALIDATION',
+  // JAW_INVALIDATION removed (brief section 9a, Phase 4) — Phase 3's real
+  // 377-trade sample showed it was the largest exit category (43.2%) with
+  // a mean R (-0.906) essentially as bad as a genuine stop-loss hit
+  // (-0.940), i.e. it wasn't earning its keep as an early-exit mechanism.
   // A user-initiated close via the admin API (not a bot-driven exit) —
   // still recorded from the real closing execution's price/qty, same as
   // every other reason, never inferred.

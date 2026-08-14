@@ -1,16 +1,19 @@
 // Tight-cadence (30-60s) monitoring of open positions — separated from the
-// coarser entry-scan cadence (brief 5d). The old bot's jaw-invalidation
-// exit closed at whatever price existed when its 3-minute loop next ran,
-// not a pre-committed price like the native SL — the leading theory for
-// its true outlier losses. Running this loop tightly is the fix.
+// coarser entry-scan cadence (brief 5d).
 //
 // Exit reason is ALWAYS derived from real execution data — matching a
 // fill's orderId against our own tracked TP legs, or Bybit's execution-
 // level `stopOrderType: 'StopLoss'` field for native SL fires — never
 // inferred from PnL sign (brief 5c).
+//
+// Jaw-invalidation exits were removed per brief section 9a (Phase 4):
+// Phase 3's real 377-trade sample showed JAW_INVALIDATION was the largest
+// exit category (163/377, 43.2%) with a mean R (-0.906) essentially as
+// bad as a genuine stop-loss hit (-0.940) — an early exit mechanism that
+// performed no better than just letting the stop do its job. Positions
+// now only close via native SL, TP1/TP2/TP3 fills, breakeven-stop, and
+// trailing-stop.
 const bybit = require('../market/bybitClient');
-const { Indicators } = require('../engine');
-const { getKlines } = require('../market/candles');
 const { roundPriceToTick } = require('../market/instrumentInfo');
 const store = require('./positionStore');
 const { EXIT_REASONS, STAGE, slExitReasonForStage } = require('./exitReasons');
@@ -43,25 +46,10 @@ async function cancelRemainingOrders(symbol) {
 }
 
 /**
- * Checks whether the Alligator jaw-touch invalidation is currently active
- * against this position's bias, using fresh candles on the entry TF.
- */
-async function checkJawInvalidation(record) {
-  const candles = await getKlines(record.symbol, record.entryTf, 150);
-  if (!candles) return false;
-  const snapshot = Indicators.analyzeTimeframe(candles);
-  if (!snapshot) return false;
-  // record.side 'Buy' expects bullish (alignment 1); 'Sell' expects bearish (-1).
-  // alligatorInvalidated is the explicit jaw-touch flag regardless of what
-  // alignment got reset to.
-  return snapshot.alligatorInvalidated === true;
-}
-
-/**
- * Processes one open position: detects fills via real execution data,
- * moves the SL on TP1/TP2 fills, runs the jaw-invalidation check, and
- * reports every exit event via callbacks (M5's tradeJournal subscribes
- * here; for now a default no-op logger is used).
+ * Processes one open position: detects fills via real execution data and
+ * moves the SL on TP1/TP2 fills. Reports every exit event via callbacks
+ * (M5's tradeJournal subscribes here; for now a default no-op logger is
+ * used).
  *
  * callbacks: { onPartialFill(record, leg, execution, reason),
  *              onFinalExit(record, reason, execution) }
@@ -137,35 +125,6 @@ async function monitorOne(record, callbacks) {
     return;
   }
 
-  // Jaw-invalidation check — only reached if the position is still open.
-  const invalidated = await checkJawInvalidation(record);
-  if (invalidated) {
-    const closeSide = record.side === 'Buy' ? 'Sell' : 'Buy';
-    logger.info('positionMonitor', 'jaw invalidation triggered, closing at market', { symbol: record.symbol, remainingQty: record.remainingQty });
-    const closeRes = await bybit.submitOrder({
-      category: 'linear',
-      symbol: record.symbol,
-      side: closeSide,
-      orderType: 'Market',
-      qty: record.remainingQty.toString(),
-      timeInForce: 'IOC',
-      reduceOnly: true,
-    });
-    if (closeRes.retCode !== 0) {
-      logger.error('positionMonitor', 'jaw invalidation close order rejected', { symbol: record.symbol, retCode: closeRes.retCode, retMsg: closeRes.retMsg });
-      store.updatePosition(record.symbol, record);
-      return;
-    }
-    // Re-query real execution to confirm actual close price rather than
-    // assuming the submit response reflects reality (same bug #1 principle).
-    const confirmExecs = await fetchNewExecutions(record.symbol, record.lastCheckedTime);
-    const closeExec = confirmExecs.find(e => e.orderId === closeRes.result.orderId) || null;
-    await callbacks.onFinalExit(record, EXIT_REASONS.JAW_INVALIDATION, closeExec);
-    await cancelRemainingOrders(record.symbol);
-    store.removePosition(record.symbol);
-    return;
-  }
-
   store.updatePosition(record.symbol, record);
 }
 
@@ -224,4 +183,4 @@ async function monitorAllPositions(callbacks = defaultCallbacks) {
   }
 }
 
-module.exports = { monitorAllPositions, monitorOne, checkJawInvalidation, closePositionManually };
+module.exports = { monitorAllPositions, monitorOne, closePositionManually };
