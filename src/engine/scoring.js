@@ -94,10 +94,18 @@ const Scoring = (() => {
 
     const primary = tfSnapshots[0]; // 1H
     if (primary) {
-      if (bias === 1 && primary.aoRising && primary.ao > 0) {
-        items.push(['AO rising, bullish', 16]); score += 16;
-      } else if (bias === -1 && !primary.aoRising && primary.ao < 0) {
-        items.push(['AO falling, bearish', 16]); score += 16;
+      // PHASE 4 (brief 9c, 2026-08-14): full AO credit now also requires
+      // the Accelerator Oscillator to agree with bias direction — catches
+      // momentum fading before AO's own zero-cross would. AO confirming
+      // without AC agreement downgrades to the existing weak-confirm tier
+      // rather than losing credit entirely, since AO itself still confirms.
+      const aoGoodBullish = bias === 1 && primary.aoRising && primary.ao > 0;
+      const aoGoodBearish = bias === -1 && !primary.aoRising && primary.ao < 0;
+      const acAgrees = primary.acRising != null && (bias === 1 ? primary.acRising : !primary.acRising);
+      if ((aoGoodBullish || aoGoodBearish) && acAgrees) {
+        items.push(['AO+AC aligned', 16]); score += 16;
+      } else if (aoGoodBullish || aoGoodBearish) {
+        items.push(['AO confirms but AC diverging (momentum fading)', 6]); score += 6;
       } else if (primary.aoRising === (bias === 1)) {
         items.push(['AO direction weak confirm', 6]); score += 6;
       }

@@ -23,6 +23,23 @@ function continuationIsDominant(evaluation) {
 }
 
 /**
+ * PHASE 4 (brief 9c, 2026-08-14): MFI Squat/Fake pre-entry filter, checked
+ * on the ENTRY TF specifically (5M for EXCELLENT, 15M for WATCH) — not 1H,
+ * unlike the existing MFI Green bonus already inside buildContinuation.
+ * Squat (falling range/volume, rising volume) is a reversal warning; Fake
+ * (rising range/volume, falling volume) is a weak/unconvincing move —
+ * both are reasons to skip the candidate entirely, same spirit as the
+ * Continuation-dominance requirement, additive to it.
+ */
+function entryTfMfiOk(evaluation, entryTf) {
+  if (!entryTf) return true;
+  const entryTfIndex = entryTf === 'm5' ? 2 : 1;
+  const snapshot = evaluation.tfSnapshots[entryTfIndex];
+  if (!snapshot) return true;
+  return snapshot.mfiSignal !== 'squat' && snapshot.mfiSignal !== 'fake';
+}
+
+/**
  * Evaluates one symbol's candle set and returns a decision object, or null
  * if there isn't enough data yet (brief: need at least 1H data).
  */
@@ -32,14 +49,17 @@ function evaluateSymbol(symbol, candlesByTf) {
 
   const scoreBand = evaluation.ceiling; // 'excellent' | 'watch' | 'avoid', already the band ceiling
   const dominant = continuationIsDominant(evaluation);
-  const tradeable = scoreBand !== 'avoid' && dominant;
+  const entryTf = scoreBand !== 'avoid' ? ENTRY_TF_BY_BAND[scoreBand] : null;
+  const mfiOk = entryTfMfiOk(evaluation, entryTf);
+  const tradeable = scoreBand !== 'avoid' && dominant && mfiOk;
 
   return {
     symbol,
     band: scoreBand,
     tradeable,
-    entryTf: tradeable ? ENTRY_TF_BY_BAND[scoreBand] : null,
+    entryTf: tradeable ? entryTf : null,
     continuationDominant: dominant,
+    entryTfMfiOk: mfiOk,
     evaluation,
   };
 }
@@ -64,4 +84,4 @@ async function scanUniverse(universe) {
   return results;
 }
 
-module.exports = { evaluateSymbol, scanUniverse, continuationIsDominant };
+module.exports = { evaluateSymbol, scanUniverse, continuationIsDominant, entryTfMfiOk };
