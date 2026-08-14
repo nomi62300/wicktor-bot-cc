@@ -72,7 +72,11 @@ async function getTradeableUniverse() {
   }
 
   universe.sort((a, b) => b.turnover24h - a.turnover24h);
-  return universe;
+  // Top N by turnover (brief section 4) — the scanner UI's smaller default
+  // exists only to keep a human's card grid glanceable, irrelevant to a
+  // backend bot; a larger universe just means more chances to find a
+  // genuinely qualifying signal each cycle.
+  return universe.slice(0, config.scanUniverseSize);
 }
 
 module.exports = { getTradeableUniverse, fetchLinearUsdtPerpetuals, fetchTickerMap };
