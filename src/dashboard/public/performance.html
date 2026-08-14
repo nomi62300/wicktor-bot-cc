@@ -33,6 +33,26 @@
   }
   .btn-close:active { background: #4a262a; }
   .empty-state { color: #8b93a5; font-size: 13px; padding: 14px 4px; }
+  .btn-chart {
+    background: #1a2233; color: #7aa2f7; border: 1px solid #2a3550; border-radius: 6px;
+    padding: 6px 12px; font-size: 12px; cursor: pointer; min-height: 32px;
+  }
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 100; align-items: center; justify-content: center; padding: 16px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: #14161c; border: 1px solid #262b36; border-radius: 10px;
+    padding: 16px; width: 100%; max-width: 900px; max-height: 90vh; overflow-y: auto;
+  }
+  .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .modal-header h3 { margin: 0; font-size: 14px; }
+  .btn-x { background: none; border: none; color: #8b93a5; font-size: 20px; cursor: pointer; line-height: 1; padding: 4px 8px; }
+  #chartContainer { width: 100%; height: 420px; }
+  .legend { font-size: 11px; color: #8b93a5; margin-top: 8px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend i { width: 10px; height: 2px; display: inline-block; }
 
   @media (max-width: 640px) {
     body { padding: 14px; }
@@ -90,6 +110,34 @@
     </div>
   </section>
 
+  <section>
+    <h2>Recent Trades</h2>
+    <div class="table-wrap">
+      <table id="tradesTable">
+        <thead><tr><th>Symbol</th><th>Side</th><th>Band</th><th>Exit Reason</th><th>R</th><th>PnL</th><th></th></tr></thead>
+        <tbody><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="modal-overlay" id="chartModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 id="chartTitle">Trade chart</h3>
+        <button class="btn-x" onclick="closeChartModal()">&times;</button>
+      </div>
+      <div id="chartContainer"></div>
+      <div class="legend">
+        <span><i style="background:#e879f9"></i> Jaw</span>
+        <span><i style="background:#38bdf8"></i> Teeth</span>
+        <span><i style="background:#facc15"></i> Lips</span>
+        <span><i style="background:#f87171"></i> Stop-loss</span>
+        <span><i style="background:#4ade80"></i> TP1/TP2/TP3</span>
+      </div>
+    </div>
+  </div>
+
+<script src="/vendor/lightweight-charts.js"></script>
 <script>
 function fmtUsd(n) { return (n >= 0 ? '+' : '') + '$' + n.toFixed(2); }
 function fmtPct(n) { return (n * 100).toFixed(1) + '%'; }
@@ -190,9 +238,116 @@ async function loadStats() {
   fillBreakdownTable('#symbolTable', stats.symbolBreakdown, ['count', 'winRate', 'netPnl']);
 }
 
+async function loadTrades() {
+  const tbody = document.querySelector('#tradesTable tbody');
+  let trades;
+  try {
+    trades = await (await fetch('/api/trades')).json();
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="7" class="loading">Failed to load</td></tr>';
+    return;
+  }
+  if (!trades || trades.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No trades yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = trades.slice(0, 30).map(t => {
+    const pnl = t.realized_pnl_usdt;
+    const r = t.r_multiple;
+    return '<tr>' +
+      '<td>' + t.symbol + '</td>' +
+      '<td>' + t.side + '</td>' +
+      '<td>' + t.band + '</td>' +
+      '<td>' + (t.final_exit_reason || (t.status === 'open' ? 'OPEN' : '—')) + '</td>' +
+      '<td class="' + (r != null ? pnlClass(r) : '') + '">' + (r != null ? r.toFixed(2) + 'R' : '—') + '</td>' +
+      '<td class="' + (pnl != null ? pnlClass(pnl) : '') + '">' + (pnl != null ? fmtUsd(pnl) : '—') + '</td>' +
+      '<td><button class="btn-chart" onclick="openChart(' + t.id + ')">Chart</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+let activeChart = null;
+
+function toChartTime(msOrSec) {
+  // Our candle .t / exec.execTime fields are epoch ms; lightweight-charts wants seconds.
+  return Math.floor(msOrSec / 1000);
+}
+
+async function openChart(tradeId) {
+  const res = await fetch('/api/trades/' + tradeId + '/chart');
+  if (!res.ok) { alert('No chart data available for this trade.'); return; }
+  const data = await res.json();
+
+  document.getElementById('chartTitle').textContent = (data.symbol || '') + ' — trade #' + tradeId;
+  document.getElementById('chartModal').classList.add('open');
+
+  const container = document.getElementById('chartContainer');
+  container.innerHTML = '';
+  if (activeChart) { activeChart.remove(); activeChart = null; }
+
+  const chart = LightweightCharts.createChart(container, {
+    layout: { background: { color: '#14161c' }, textColor: '#8b93a5' },
+    grid: { vertLines: { color: '#20242e' }, horzLines: { color: '#20242e' } },
+    timeScale: { timeVisible: true },
+    width: container.clientWidth,
+    height: 420,
+  });
+  activeChart = chart;
+
+  // Merge persisted (decision-time) candles with freshly-fetched live
+  // candles for "what happened after" context, deduped by timestamp.
+  const byTime = new Map();
+  (data.candles || []).forEach(c => byTime.set(c.t, c));
+  (data.liveCandles || []).forEach(c => byTime.set(c.t, c));
+  const merged = Array.from(byTime.values()).sort((a, b) => a.t - b.t);
+
+  const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+    upColor: '#4ade80', downColor: '#f87171', borderVisible: false,
+    wickUpColor: '#4ade80', wickDownColor: '#f87171',
+  });
+  candleSeries.setData(merged.map(c => ({ time: toChartTime(c.t), open: c.o, high: c.h, low: c.l, close: c.c })));
+
+  function addLine(values, color, candles) {
+    const series = chart.addSeries(LightweightCharts.LineSeries, { color, lineWidth: 1 });
+    const points = candles.map((c, i) => ({ time: toChartTime(c.t), value: values[i] }))
+      .filter(p => p.value != null);
+    series.setData(points);
+    return series;
+  }
+  if (data.candles && data.candles.length) {
+    addLine(data.jaw, '#e879f9', data.candles);
+    addLine(data.teeth, '#38bdf8', data.candles);
+    addLine(data.lips, '#facc15', data.candles);
+  }
+
+  if (data.slPrice) candleSeries.createPriceLine({ price: data.slPrice, color: '#f87171', lineWidth: 1, title: 'SL' });
+  if (data.tp1Price) candleSeries.createPriceLine({ price: data.tp1Price, color: '#4ade80', lineWidth: 1, title: 'TP1' });
+  if (data.tp2Price) candleSeries.createPriceLine({ price: data.tp2Price, color: '#4ade80', lineWidth: 1, title: 'TP2' });
+  if (data.tp3Price) candleSeries.createPriceLine({ price: data.tp3Price, color: '#4ade80', lineWidth: 1, title: 'TP3' });
+
+  if (data.markers && data.markers.length && LightweightCharts.createSeriesMarkers) {
+    const markers = data.markers.map(m => ({
+      time: toChartTime(m.time),
+      position: m.type === 'entry' ? 'belowBar' : 'aboveBar',
+      color: m.type === 'entry' ? '#7aa2f7' : (m.type === 'exit' ? '#f87171' : '#4ade80'),
+      shape: m.type === 'entry' ? 'arrowUp' : 'circle',
+      text: m.type.toUpperCase(),
+    })).sort((a, b) => a.time - b.time);
+    LightweightCharts.createSeriesMarkers(candleSeries, markers);
+  }
+
+  chart.timeScale().fitContent();
+}
+
+function closeChartModal() {
+  document.getElementById('chartModal').classList.remove('open');
+  if (activeChart) { activeChart.remove(); activeChart = null; }
+}
+
 function loadAll() {
   loadStats();
   loadPositions();
+  loadTrades();
 }
 
 loadAll();

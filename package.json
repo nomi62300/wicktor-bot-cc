@@ -11,7 +11,8 @@
   "dependencies": {
     "bybit-api": "^3.10.20",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "lightweight-charts": "^5.2.1"
   },
   "engines": {
     "node": ">=22"

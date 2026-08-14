@@ -11,6 +11,7 @@ async function onPartialFill(record, leg, exec, reason) {
     return;
   }
   tradeJournal.recordPartialFill(record.tradeId, leg.level, parseFloat(exec.execPrice), parseFloat(exec.execQty), Number(exec.execTime));
+  tradeJournal.appendChartMarker(record.tradeId, { type: leg.level.toLowerCase(), time: Number(exec.execTime), price: parseFloat(exec.execPrice) });
 }
 
 async function onFinalExit(record, reason, exec) {
@@ -26,13 +27,14 @@ async function onFinalExit(record, reason, exec) {
   if (reason === 'TAKE_PROFIT_FINAL' && exec) {
     legs.push({ level: 'TP3', price: parseFloat(exec.execPrice), qty: parseFloat(exec.execQty) });
   } else {
-    // SL / breakeven / trailing / jaw-invalidation close: `exec` is the
-    // closing fill for whatever qty remained on the position.
+    // SL / breakeven / trailing / manual close: `exec` is the closing
+    // fill for whatever qty remained on the position.
     const price = exec ? parseFloat(exec.execPrice) : record.slPrice;
     const qty = exec ? parseFloat(exec.execQty) : record.remainingQty;
     legs.push({ level: 'FINAL', price, qty });
   }
 
+  const closedAt = exec ? Number(exec.execTime) : Date.now();
   tradeJournal.closeTrade(record.tradeId, {
     side: record.side,
     entryPrice: record.entryPrice,
@@ -40,8 +42,11 @@ async function onFinalExit(record, reason, exec) {
     totalQty: record.totalQty,
     finalExitReason: reason,
     legs,
-    closedAt: exec ? Number(exec.execTime) : Date.now(),
+    closedAt,
   });
+
+  const finalLeg = legs[legs.length - 1];
+  tradeJournal.appendChartMarker(record.tradeId, { type: 'exit', time: closedAt, price: finalLeg.price, reason });
 }
 
 module.exports = { onPartialFill, onFinalExit };

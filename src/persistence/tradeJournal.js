@@ -105,4 +105,56 @@ function getClosedTrades() {
   return db.prepare(`SELECT * FROM trades WHERE status = 'closed' ORDER BY closed_at DESC`).all();
 }
 
-module.exports = { openTrade, findOpenTradeId, findMostRecentOpenTrade, recordPartialFill, closeTrade, getAllTrades, getClosedTrades };
+/**
+ * Persists the chart snapshot at entry time (brief 7a/9d) — candles and
+ * Jaw/Teeth/Lips as the bot actually computed them for the entry decision,
+ * never recalculated later. Seeds markers_json with the entry marker.
+ */
+function saveChartSnapshot(tradeId, { entryTf, candles, jaw, teeth, lips, entryPrice, entryTime, slPrice, tp1Price, tp2Price, tp3Price }) {
+  const markers = [{ type: 'entry', time: entryTime, price: entryPrice }];
+  db.prepare(`
+    INSERT INTO trade_charts (trade_id, entry_tf, candles_json, jaw_json, teeth_json, lips_json, markers_json, sl_price, tp1_price, tp2_price, tp3_price)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(trade_id) DO NOTHING
+  `).run(
+    tradeId, entryTf, JSON.stringify(candles), JSON.stringify(jaw), JSON.stringify(teeth), JSON.stringify(lips),
+    JSON.stringify(markers), slPrice, tp1Price ?? null, tp2Price ?? null, tp3Price ?? null,
+  );
+}
+
+/**
+ * Appends one marker (TP fill, final exit) to a trade's chart record.
+ * No-op if no chart snapshot exists for this trade (e.g. a reconciled
+ * position with no linked tradeId — same fail-safe pattern as journaling
+ * itself, never fabricates data for a trade it doesn't have real data on).
+ */
+function appendChartMarker(tradeId, marker) {
+  const row = db.prepare('SELECT markers_json FROM trade_charts WHERE trade_id = ?').get(tradeId);
+  if (!row) return;
+  const markers = JSON.parse(row.markers_json);
+  markers.push(marker);
+  db.prepare('UPDATE trade_charts SET markers_json = ? WHERE trade_id = ?').run(JSON.stringify(markers), tradeId);
+}
+
+function getChartData(tradeId) {
+  const row = db.prepare('SELECT * FROM trade_charts WHERE trade_id = ?').get(tradeId);
+  if (!row) return null;
+  return {
+    tradeId: row.trade_id,
+    entryTf: row.entry_tf,
+    candles: JSON.parse(row.candles_json),
+    jaw: JSON.parse(row.jaw_json),
+    teeth: JSON.parse(row.teeth_json),
+    lips: JSON.parse(row.lips_json),
+    markers: JSON.parse(row.markers_json),
+    slPrice: row.sl_price,
+    tp1Price: row.tp1_price,
+    tp2Price: row.tp2_price,
+    tp3Price: row.tp3_price,
+  };
+}
+
+module.exports = {
+  openTrade, findOpenTradeId, findMostRecentOpenTrade, recordPartialFill, closeTrade, getAllTrades, getClosedTrades,
+  saveChartSnapshot, appendChartMarker, getChartData,
+};

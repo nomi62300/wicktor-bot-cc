@@ -65,6 +65,24 @@ db.exec(`
     balance REAL NOT NULL,
     note TEXT
   );
+
+  -- Phase 4 (brief 7a/9d): per-trade chart data. candles/jaw/teeth/lips
+  -- are the bot's own live-computed values at entry decision time, not
+  -- recalculated after the fact. markers_json accumulates entry/TP-fill/
+  -- exit events as they happen (see tradeJournal.appendChartMarker).
+  CREATE TABLE IF NOT EXISTS trade_charts (
+    trade_id INTEGER PRIMARY KEY REFERENCES trades(id),
+    entry_tf TEXT NOT NULL,
+    candles_json TEXT NOT NULL,
+    jaw_json TEXT NOT NULL,
+    teeth_json TEXT NOT NULL,
+    lips_json TEXT NOT NULL,
+    markers_json TEXT NOT NULL DEFAULT '[]',
+    sl_price REAL,
+    tp1_price REAL,
+    tp2_price REAL,
+    tp3_price REAL
+  );
 `);
 
 module.exports = db;

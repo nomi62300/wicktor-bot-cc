@@ -6,6 +6,7 @@ const positionStore = require('../trading/positionStore');
 const positionMonitor = require('../trading/positionMonitor');
 const journalIntegration = require('../trading/journalIntegration');
 const bybit = require('../market/bybitClient');
+const { getKlines } = require('../market/candles');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -101,6 +102,30 @@ router.post('/api/positions/:symbol/close', requireAdminToken, async (req, res) 
 
 router.get('/api/trades', (req, res) => {
   res.json(tradeJournal.getAllTrades());
+});
+
+/**
+ * Chart data for one trade (brief 7a/9d): the persisted, decision-time-
+ * accurate snapshot (candles/Jaw/Teeth/Lips/markers as the bot actually
+ * saw them), PLUS freshly-fetched recent candles for live "what did price
+ * do after the exit" context — fetched at view-time rather than trying to
+ * synchronously capture "a few bars after exit" the instant the trade
+ * closes, when those bars don't exist yet.
+ */
+router.get('/api/trades/:id/chart', async (req, res) => {
+  const tradeId = parseInt(req.params.id, 10);
+  const chart = tradeJournal.getChartData(tradeId);
+  if (!chart) return res.status(404).json({ error: 'no_chart_data' });
+
+  const trade = tradeJournal.getAllTrades().find(t => t.id === tradeId);
+  let liveCandles = [];
+  try {
+    liveCandles = await getKlines(trade.symbol, chart.entryTf, 30) || [];
+  } catch (err) {
+    logger.warn('routes', 'live candle fetch for chart failed, returning persisted data only', { tradeId, error: err.message });
+  }
+
+  res.json({ ...chart, symbol: trade ? trade.symbol : null, liveCandles });
 });
 
 const CSV_COLUMNS = [

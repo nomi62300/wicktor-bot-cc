@@ -10,6 +10,7 @@ const config = require('../config');
 const { getTradeableUniverse } = require('../market/universe');
 const { scanUniverse } = require('./signalScanner');
 const { getKlines } = require('../market/candles');
+const { Indicators } = require('../engine');
 const { computeStopLoss } = require('./stopLoss');
 const { computePositionSize } = require('./positionSizing');
 const { executeEntry } = require('./orderExecution');
@@ -202,6 +203,32 @@ async function attemptEntry(decision, bankrollUsdt) {
     stopDistance: result.stopDistance, totalQty: actualQty,
     riskAmountUsdt: sizing.riskAmountUsdt, accountBalanceBefore: bankrollUsdt, openedAt,
   });
+
+  // Chart snapshot (brief 7a/9d): Jaw/Teeth/Lips computed from the SAME
+  // candles array that drove this entry decision, not recalculated later.
+  // Trimmed to the last ~50 bars (pre-entry context, per the brief).
+  try {
+    const { jaw, teeth, lips } = Indicators.alligator(candles);
+    const window = Math.min(50, candles.length);
+    const tp1 = result.tpLevels.find(t => t.level === 'TP1');
+    const tp2 = result.tpLevels.find(t => t.level === 'TP2');
+    const tp3 = result.tpLevels.find(t => t.level === 'TP3');
+    tradeJournal.saveChartSnapshot(tradeId, {
+      entryTf,
+      candles: candles.slice(-window),
+      jaw: jaw.slice(-window),
+      teeth: teeth.slice(-window),
+      lips: lips.slice(-window),
+      entryPrice: result.entryPrice,
+      entryTime: candles[candles.length - 1].t,
+      slPrice: result.slPrice,
+      tp1Price: tp1 ? tp1.price : null,
+      tp2Price: tp2 ? tp2.price : null,
+      tp3Price: tp3 ? tp3.price : null,
+    });
+  } catch (err) {
+    logger.warn('cycle', 'chart snapshot save failed, trade still tracked normally', { symbol, tradeId, error: err.message });
+  }
 
   store.addPosition({
     symbol, side, entryPrice: result.entryPrice,
