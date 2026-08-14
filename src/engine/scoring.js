@@ -8,6 +8,17 @@
    logic (wicktor-bot-cc brief section 2) exactly. If the scanner repo's
    scoring logic changes, re-copy this file and re-verify that still holds.
 
+   PHASE 4 NOTE (brief section 9b, 2026-08-14): buildExhaustion() and
+   tradeQualityScore() below have wicktor-bot-cc-specific bug fixes on top
+   of the verbatim port — a Buy/Sell asymmetry audit (prompted by Phase 3's
+   real data showing Sell 37.1% win rate vs Buy 31.4%, a persistent gap
+   across two independent samples) found three RSI-threshold comparisons
+   that were never mirrored for bearish (bias === -1) trades: the 5M/1H
+   exhaustion RSI checks only handled the overbought/high-RSI case, and
+   tradeQualityScore's "healthy RSI zone" used a fixed bullish-centric band
+   for both directions. Fixed to mirror properly — see inline comments at
+   each spot. A future re-sync from wicktor-scanner needs to reapply these.
+
    Takes the per-timeframe indicator snapshots (1H, 15M, 5M) and produces:
    - direction (-100..100 gauge value)
    - alignment count (0-3) and dominant bias
@@ -105,18 +116,28 @@ const Scoring = (() => {
     return { score: Math.min(65, score), items };
   }
 
-  function buildExhaustion(tfSnapshots) {
+  function buildExhaustion(tfSnapshots, bias) {
     const items = [];
     let score = 0;
-    // fastest timeframe (5M) reaching RSI extremes is an exhaustion signal
+    // fastest timeframe (5M) reaching RSI extremes is an exhaustion signal.
+    // PHASE 4 FIX (9b): gated on bias — a long's exhaustion warning is
+    // overbought (upside stretched, might turn against the long); a
+    // short's is oversold (downside stretched, might turn against the
+    // short). The un-gated version applied both branches regardless of
+    // direction, so a short could pick up "overbought" exhaustion points
+    // that didn't mean what they were labeled to mean.
     const fast = tfSnapshots[2]; // 5M
     if (fast && fast.rsi != null) {
-      if (fast.rsi >= 68) { items.push(['5M RSI approaching overbought', Math.round((fast.rsi - 60))]); score += Math.round(fast.rsi - 60); }
-      else if (fast.rsi <= 32) { items.push(['5M RSI approaching oversold', Math.round(40 - fast.rsi)]); score += Math.round(40 - fast.rsi); }
+      if (bias === 1 && fast.rsi >= 68) { items.push(['5M RSI approaching overbought', Math.round((fast.rsi - 60))]); score += Math.round(fast.rsi - 60); }
+      else if (bias === -1 && fast.rsi <= 32) { items.push(['5M RSI approaching oversold', Math.round(40 - fast.rsi)]); score += Math.round(40 - fast.rsi); }
     }
     const primary = tfSnapshots[0];
-    if (primary && primary.rsi != null && primary.rsi >= 75) {
-      items.push(['1H RSI extreme', 15]); score += 15;
+    // PHASE 4 FIX (9b): the original only had an overbought (>= 75) branch
+    // — bearish trades had no oversold (<= 25) mirror at all, missing an
+    // entire exhaustion signal that longs got.
+    if (primary && primary.rsi != null) {
+      if (bias === 1 && primary.rsi >= 75) { items.push(['1H RSI extreme (overbought)', 15]); score += 15; }
+      else if (bias === -1 && primary.rsi <= 25) { items.push(['1H RSI extreme (oversold)', 15]); score += 15; }
     }
 
     // Accelerator Oscillator: momentum-of-momentum decelerating ahead of
@@ -218,7 +239,13 @@ const Scoring = (() => {
       const aoGood = (bias === 1 && primary.aoRising) || (bias === -1 && !primary.aoRising);
       momentumScore = aoGood ? 75 : 35;
       if (primary.rsi != null) {
-        const healthy = primary.rsi > 40 && primary.rsi < 75;
+        // PHASE 4 FIX (9b): the "healthy RSI zone" was a fixed (40,75)
+        // band applied to BOTH directions — bullish-centric, since a
+        // downtrend's RSI naturally sits lower than an uptrend's. This is
+        // the most consequential of the three asymmetry fixes: it fed
+        // every trade's overall quality score, systematically mis-scoring
+        // short setups. Mirrored around 50 for bearish bias.
+        const healthy = bias === 1 ? (primary.rsi > 40 && primary.rsi < 75) : (primary.rsi > 25 && primary.rsi < 60);
         momentumScore += healthy ? 15 : -10;
       }
     }
@@ -272,7 +299,7 @@ const Scoring = (() => {
     const { bias, count } = computeBias(tfSnapshots);
     const ceiling = alignmentCeiling(tfSnapshots, bias);
     const continuation = buildContinuation(tfSnapshots, bias);
-    const exhaustion = buildExhaustion(tfSnapshots);
+    const exhaustion = buildExhaustion(tfSnapshots, bias);
     const reversal = buildReversal(tfSnapshots, bias);
     const dir = directionValue(tfSnapshots);
     const regime = regimeLabel(dir, count);
