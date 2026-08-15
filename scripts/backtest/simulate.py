@@ -51,6 +51,32 @@ def load_m5(symbol):
         return json.load(f)
 
 
+def load_jaw_invalidation(symbol, entry_tf):
+    """Optional: only present if generateJawInvalidation.js was run for
+    this symbol (see that file — jaw-invalidation was removed from the
+    live bot in brief 9a; this data exists solely to reproduce Phase 3
+    exactly for the backtest engine's trust-building sanity check)."""
+    path = os.path.join(BACKTEST_DATA, symbol, f'jawInvalidated_{entry_tf}.json')
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)  # sorted by t (ascending), same order as source candles
+
+
+def is_invalidated_at(jaw_series, query_time):
+    """Invalidation state as of the most recent entry-TF candle close at
+    or before query_time — matches how the live monitor polled frequently
+    but the underlying indicator only updated at entry-TF boundaries."""
+    if not jaw_series:
+        return False
+    state = False
+    for entry in jaw_series:
+        if entry['t'] > query_time:
+            break
+        state = entry['invalidated']
+    return state
+
+
 def tp_levels(side, entry_price, stop_distance):
     sign = 1 if side == 'Buy' else -1
     return {
@@ -65,7 +91,7 @@ def hits(candle, level):
     return candle['l'] <= level <= candle['h']
 
 
-def simulate_position(signal, m5_candles, bankroll, risk_pct):
+def simulate_position(signal, m5_candles, bankroll, risk_pct, jaw_series=None):
     side = signal['side']
     entry_price = signal['entryPrice']
     stop_distance = signal['stopDistance']
@@ -87,6 +113,15 @@ def simulate_position(signal, m5_candles, bankroll, risk_pct):
     exit_time = None
 
     for candle in future:
+        # Jaw-invalidation check (Phase-3-only reproduction — see
+        # generateJawInvalidation.js; live bot no longer has this path
+        # per brief 9a). Checked every candle, same as SL/TP, closing at
+        # THIS candle's close — mirrors the old live behavior of closing
+        # at whatever price exists when the monitor loop next runs.
+        if jaw_series is not None and is_invalidated_at(jaw_series, candle['t']):
+            exit_reason, exit_price, exit_time = 'JAW_INVALIDATION', candle['c'], candle['t']
+            break
+
         if stage == 'initial':
             sl_hit = hits(candle, sl_price)
             tp1_hit = hits(candle, tps['TP1'])
@@ -147,9 +182,10 @@ def simulate_position(signal, m5_candles, bankroll, risk_pct):
     }
 
 
-def run(risk_pct, starting_bankroll, max_positions=3):
+def run(risk_pct, starting_bankroll, max_positions=3, use_jaw_invalidation=False):
     signals = load_signals()
     candle_cache = {}
+    jaw_cache = {}
     open_positions = []  # [{symbol, exitTime}] — real interval tracking
     bankroll = starting_bankroll
     trades = []
@@ -170,7 +206,14 @@ def run(risk_pct, starting_bankroll, max_positions=3):
         if symbol not in candle_cache:
             candle_cache[symbol] = load_m5(symbol)
 
-        result = simulate_position(sig, candle_cache[symbol], bankroll, risk_pct)
+        jaw_series = None
+        if use_jaw_invalidation:
+            cache_key = (symbol, sig['entryTf'])
+            if cache_key not in jaw_cache:
+                jaw_cache[cache_key] = load_jaw_invalidation(symbol, sig['entryTf'])
+            jaw_series = jaw_cache[cache_key]
+
+        result = simulate_position(sig, candle_cache[symbol], bankroll, risk_pct, jaw_series)
         if result is None:
             continue  # never resolved within available data — skip, not counted
 
@@ -236,9 +279,11 @@ def main():
     parser.add_argument('--risk-pct', type=float, default=0.0015)
     parser.add_argument('--bankroll', type=float, default=100.0)
     parser.add_argument('--max-positions', type=int, default=3)
+    parser.add_argument('--jaw-invalidation', action='store_true',
+                         help='Include the (removed, brief 9a) jaw-invalidation exit path — for Phase 3 reproduction only')
     args = parser.parse_args()
 
-    trades, final_bankroll = run(args.risk_pct, args.bankroll, args.max_positions)
+    trades, final_bankroll = run(args.risk_pct, args.bankroll, args.max_positions, args.jaw_invalidation)
     stats = compute_stats(trades, args.bankroll)
 
     os.makedirs(BACKTEST_RESULTS, exist_ok=True)
