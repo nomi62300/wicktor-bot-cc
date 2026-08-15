@@ -11,6 +11,10 @@ pipeline that replays the REAL live signal engine over historical data
 rather than reimplementing it — avoids the classic backtesting trap of
 signal-logic drift between what's tested and what actually runs live.
 
+- **[`66defc5`](../../commit/66defc5)** `fetchHistory.js` hardened against
+  network-level throws (retry-with-backoff + per-symbol try/catch) after
+  a transient DNS blip crashed the full 45-symbol Phase 3 fetch on its
+  very first request.
 - **[`955dda3`](../../commit/955dda3)** `simulate.py` — pure-stdlib
   execution/risk simulation (no vectorbt/pandas; its stop-loss/TP
   primitives don't fit our exact partial-exit + breakeven + trailing
