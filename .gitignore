@@ -6,3 +6,8 @@ node_modules/
 *.sqlite3
 .DS_Store
 npm-debug.log*
+backtest-data/
+backtest-results/
+*.parquet
+.venv/
+__pycache__/
