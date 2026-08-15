@@ -20,6 +20,24 @@ const OUT_DIR = path.join(__dirname, '..', '..', 'backtest-data');
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 /**
+ * Fetches one page with retry — a network-level throw (DNS blip,
+ * connection reset, etc.) is NOT the same as a valid non-zero retCode
+ * response, and must not crash a long multi-symbol batch fetch over one
+ * transient hiccup. Up to 3 attempts with backoff before giving up on
+ * this page.
+ */
+async function getKlineWithRetry(params, attempt = 1) {
+  try {
+    return await bybit.getKline(params);
+  } catch (err) {
+    if (attempt >= 3) throw err;
+    logger.warn('fetchHistory', 'getKline threw, retrying', { params, attempt, error: err.message });
+    await sleep(1000 * attempt);
+    return getKlineWithRetry(params, attempt + 1);
+  }
+}
+
+/**
  * Pages backward from `endMs` to `startMs`, 200 candles per request, with
  * a small delay between requests to stay well under Bybit's rate limit.
  */
@@ -29,7 +47,13 @@ async function fetchRange(symbol, tf, startMs, endMs) {
   let cursor = endMs;
 
   while (cursor > startMs) {
-    const res = await bybit.getKline({ category: 'linear', symbol, interval, end: cursor, limit: 200 });
+    let res;
+    try {
+      res = await getKlineWithRetry({ category: 'linear', symbol, interval, end: cursor, limit: 200 });
+    } catch (err) {
+      logger.error('fetchHistory', 'getKline failed after retries, stopping this symbol/TF here (partial data kept)', { symbol, tf, error: err.message });
+      break;
+    }
     if (res.retCode !== 0) {
       logger.warn('fetchHistory', 'getKline failed', { symbol, tf, retCode: res.retCode, retMsg: res.retMsg });
       break;
@@ -74,10 +98,19 @@ async function main() {
   const symbols = symbolsArg.split(',').map(s => s.trim());
   const days = parseInt(daysArg, 10);
 
+  const failed = [];
   for (const symbol of symbols) {
-    await fetchSymbol(symbol, days);
+    try {
+      await fetchSymbol(symbol, days);
+    } catch (err) {
+      // One symbol failing entirely (e.g. delisted, invalid) must not
+      // abort the rest of a long batch fetch — same per-item try/catch
+      // principle as the live bot's entry loop (brief 5g).
+      logger.error('fetchHistory', 'symbol failed entirely, skipping', { symbol, error: err.message });
+      failed.push(symbol);
+    }
   }
-  logger.info('fetchHistory', 'done', { symbols, days });
+  logger.info('fetchHistory', 'done', { symbols: symbols.length, days, failed });
 }
 
 if (require.main === module) {
