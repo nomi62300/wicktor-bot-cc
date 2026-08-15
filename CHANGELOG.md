@@ -11,6 +11,16 @@ pipeline that replays the REAL live signal engine over historical data
 rather than reimplementing it — avoids the classic backtesting trap of
 signal-logic drift between what's tested and what actually runs live.
 
+- **[`fd3b806`](../../commit/fd3b806)** Attempted the Phase 3 reproduction
+  sanity check against the full 45-symbol universe. Trade count matched
+  closely (373 simulated vs 377 real), but found a real, unresolved bug:
+  simulated JAW_INVALIDATION exits average positive PnL, while real
+  Phase 3 data shows them averaging -0.906R. Leading theory is a
+  stateful-indicator issue in `indicators.js`'s touch-state logic when
+  recomputed on sliding windows rather than continuously — not yet
+  confirmed. **Known issue, picking up next session** — the rest of the
+  pipeline (data fetch, signal replay, and the non-jaw SL/TP/breakeven/
+  trailing simulation) is independently verified correct.
 - **[`66defc5`](../../commit/66defc5)** `fetchHistory.js` hardened against
   network-level throws (retry-with-backoff + per-symbol try/catch) after
   a transient DNS blip crashed the full 45-symbol Phase 3 fetch on its
