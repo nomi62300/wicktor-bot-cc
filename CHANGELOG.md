@@ -11,11 +11,20 @@ pipeline that replays the REAL live signal engine over historical data
 rather than reimplementing it — avoids the classic backtesting trap of
 signal-logic drift between what's tested and what actually runs live.
 
+- **[`955dda3`](../../commit/955dda3)** `simulate.py` — pure-stdlib
+  execution/risk simulation (no vectorbt/pandas; its stop-loss/TP
+  primitives don't fit our exact partial-exit + breakeven + trailing
+  sequence, so this hand-rolls the same state machine
+  `positionMonitor.js` uses live). Found and fixed two real bugs during
+  verification: stop-loss trades weren't counting their loss at all
+  (netPnl exactly 0.0 was the tell), and position-limit tracking was
+  declared but never updated. Verified every trade's R-multiple matches
+  its exact expected value by exit-reason semantics.
 - **[`4b83794`](../../commit/4b83794)** `fetchHistory.js` (paginated
   Bybit kline cache, verified exact candle counts) and `generateSignals.js`
   (replays the real `signalScanner.evaluateSymbol()` bar-by-bar over
-  cached history, outputs a decisions CSV). Next: Python execution/risk
-  simulation layer.
+  cached history, outputs a decisions CSV; later extended to include
+  stop-loss data via the real `computeStopLoss()`).
 
 ## 2026-08-14 — Phase 4 (brief section 4 + section 9)
 
