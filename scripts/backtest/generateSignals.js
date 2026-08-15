@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const { evaluateSymbol } = require('../../src/trading/signalScanner');
+const { computeStopLoss } = require('../../src/trading/stopLoss');
 const logger = require('../../src/utils/logger');
 
 const OUT_DIR = path.join(__dirname, '..', '..', 'backtest-data');
@@ -39,7 +40,7 @@ function csvEscape(v) {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-const CSV_COLUMNS = ['symbol', 'timestamp', 'band', 'entryTf', 'side', 'entryPrice', 'score', 'alignCount'];
+const CSV_COLUMNS = ['symbol', 'timestamp', 'band', 'entryTf', 'side', 'entryPrice', 'stopDistance', 'slPrice', 'score', 'alignCount'];
 
 function generateForSymbol(symbol) {
   const h1All = loadCandles(symbol, 'h1');
@@ -67,8 +68,18 @@ function generateForSymbol(symbol) {
     const entryPrice = entrySlice[entrySlice.length - 1].c;
     const side = decision.evaluation.bias === 1 ? 'Buy' : 'Sell';
 
+    // Real stop-loss computation (same function orderExecution.js calls
+    // live) — same "don't reimplement, replay the real code" principle.
+    let sl;
+    try {
+      sl = computeStopLoss(side, entrySlice, entryPrice);
+    } catch (err) {
+      continue; // direction-assertion failure — live code would skip this trade too
+    }
+
     rows.push({
       symbol, timestamp: simTime, band: decision.band, entryTf: decision.entryTf, side, entryPrice,
+      stopDistance: sl.stopDistance, slPrice: sl.slPrice,
       score: decision.evaluation.score, alignCount: decision.evaluation.alignCount,
     });
   }
