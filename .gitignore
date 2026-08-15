@@ -11,3 +11,4 @@ backtest-results/
 *.parquet
 .venv/
 __pycache__/
+HANDOFF.md

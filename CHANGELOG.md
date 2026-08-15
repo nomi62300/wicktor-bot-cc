@@ -3,16 +3,6 @@
 All notable changes to this project are logged here, newest first.
 Each entry links the commit that made the change.
 
-## 2026-08-15 — Session handoff document
-
-Added `HANDOFF.md`: a complete, self-contained summary of this entire
-build session (architecture, all confirmed bugs found and fixed, Phase 4
-changes, backtesting pipeline status including the known jaw-invalidation
-bug, operational standing instructions) — written so a fresh session with
-no memory of the conversation can pick up exactly where this one left
-off. `CHANGELOG.md` remains the chronological commit-by-commit record;
-`HANDOFF.md` is the narrative/context version.
-
 ## 2026-08-15 — Offline backtesting pipeline (in progress)
 
 Prompted by Phase 3's core lesson: the only way to validate a strategy
