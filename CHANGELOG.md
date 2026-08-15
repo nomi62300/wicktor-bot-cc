@@ -3,6 +3,20 @@
 All notable changes to this project are logged here, newest first.
 Each entry links the commit that made the change.
 
+## 2026-08-15 — Offline backtesting pipeline (in progress)
+
+Prompted by Phase 3's core lesson: the only way to validate a strategy
+change has been "deploy it and wait days." Building a separate offline
+pipeline that replays the REAL live signal engine over historical data
+rather than reimplementing it — avoids the classic backtesting trap of
+signal-logic drift between what's tested and what actually runs live.
+
+- **[`4b83794`](../../commit/4b83794)** `fetchHistory.js` (paginated
+  Bybit kline cache, verified exact candle counts) and `generateSignals.js`
+  (replays the real `signalScanner.evaluateSymbol()` bar-by-bar over
+  cached history, outputs a decisions CSV). Next: Python execution/risk
+  simulation layer.
+
 ## 2026-08-14 — Phase 4 (brief section 4 + section 9)
 
 Prompted by real Phase 3 results (377 closed trades over 4.5 days, verified
